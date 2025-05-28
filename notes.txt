@@ -1,0 +1,16 @@
+# json will look like
+
+{
+  "scores": {
+    "ELF3": {
+      "BHLHE40": 1.2837,
+      "RXRB": 0.9752,
+      ...
+    },
+    "BHLHE40": {
+      "ELF3": 0.8821,
+      ...
+    },
+    ...
+  }
+}

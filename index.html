@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>APA Score Heatmap Viewer</title>
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <canvas id="heatmap_canvas"></canvas>
+
+    <!-- Floating button to open controls modal -->
+    <button id="open-controls" title="Show Controls">☰</button>
+
+    <!-- Controls Modal -->
+    <div id="controls-modal" class="modal">
+      <div class="modal-content">
+        <span class="close" id="close-controls">&times;</span>
+        <h2>Heatmap Controls</h2>
+        <label for="version">Version:</label>
+        <select id="version">
+          <option value="v27-1">v27-1</option>
+        </select>
+        <br>
+        <label for="distance">Distance Type:</label>
+        <select id="distance">
+          <option value="intra.short">intra.short</option>
+          <option value="intra.long">intra.long</option>
+          <option value="inter">inter</option>
+        </select>
+        <br>
+        <label for="colorScheme">Color Scheme:</label>
+        <select id="colorScheme">
+          <option value="red">Red</option>
+          <option value="blue">Blue</option>
+          <option value="green">Green</option>
+        </select>
+        <br>
+        <label for="minColor">Min Color Value:</label>
+        <input type="number" id="minColor" step="any">
+        <br>
+        <label for="maxColor">Max Color Value:</label>
+        <input type="number" id="maxColor" step="any">
+      </div>
+    </div>
+
+    <!-- Loading Modal -->
+    <div id="loading-modal" class="modal">
+      <div class="modal-content loading-content">
+        <span>Loading heatmap...</span>
+      </div>
+    </div>
+
+    <!-- Color scale legend overlay -->
+    <div id="color-scale-overlay"></div>
+
+    <script src="https://d3js.org/d3.v7.min.js"></script>
+    <script src="script.js"></script>
+</body>
+</html> 
