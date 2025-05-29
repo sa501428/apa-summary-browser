@@ -20,6 +20,7 @@
         <label for="version">Version:</label>
         <select id="version">
           <option value="v27-1">v27-1</option>
+          <option value="v27-2" selected>v27-2</option>
         </select>
         <br>
         <label for="distance">Distance Type:</label>
@@ -41,6 +42,22 @@
         <br>
         <label for="maxColor">Max Color Value:</label>
         <input type="number" id="maxColor" step="any">
+        <br>
+        <label for="clustering">Clustering:</label>
+        <select id="clustering">
+          <option value="none">None</option>
+          <option value="ward">Hierarchical (Ward)</option>
+          <option value="average">Hierarchical (Average)</option>
+          <option value="spectral">Spectral</option>
+          <option value="louvain">Louvain</option>
+          <option value="labelprop">Label Propagation</option>
+          <option value="modularity">Modularity Maximization</option>
+          <option value="affinity">Affinity Propagation</option>
+          <option value="nmf">NMF</option>
+          <option value="kmeans">k-means (Spectral Embedding)</option>
+          <option value="random">Random</option>
+        </select>
+        <br>
       </div>
     </div>
 

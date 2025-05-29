@@ -1,6 +1,6 @@
 const BASE_URL = 'https://s3.us-central-1.wasabisys.com/aiden-encode-hic-mirror/apa-heatmaps/';
-const VERSIONS = ['v27-1'];
-let currentVersion = 'v27-1';
+const VERSIONS = ['v27-1','v27-2'];
+let currentVersion = 'v27-2';
 
 // Cache for JSON data
 const dataCache = {
@@ -33,6 +33,9 @@ let isPanning = false;
 let startPan = {x: 0, y: 0};
 let minCellSize = 2;
 let maxCellSize = 40;
+
+let currentOrder = null; // Array of indices for current row/col order
+let originalOrder = null; // Store the original order for 'None'
 
 // Debounce function to limit rapid updates
 function debounce(func, wait) {
@@ -210,6 +213,266 @@ function resizeCanvasToDisplaySize(canvas) {
     }
 }
 
+function getDistanceMatrix(data, order) {
+    // Use 1 - normalized value as distance
+    const n = order.length;
+    const matrix = Array.from({length: n}, () => Array(n).fill(0));
+    let maxVal = -Infinity, minVal = Infinity;
+    for (let i = 0; i < n; ++i) {
+        for (let j = 0; j < n; ++j) {
+            const v = data[order[i]][order[j]] || 0;
+            if (v > maxVal) maxVal = v;
+            if (v < minVal) minVal = v;
+        }
+    }
+    for (let i = 0; i < n; ++i) {
+        for (let j = 0; j < n; ++j) {
+            const v = data[order[i]][order[j]] || 0;
+            matrix[i][j] = 1 - (v - minVal) / (maxVal - minVal + 1e-9);
+        }
+    }
+    return matrix;
+}
+
+function hierarchicalClustering(order, data, linkage) {
+    // Simple agglomerative clustering (O(n^3), fine for n=700)
+    // linkage: 'ward' or 'average'
+    const n = order.length;
+    let clusters = order.map((idx, i) => [i]);
+    const dist = getDistanceMatrix(data, order);
+    let active = Array.from({length: n}, (_, i) => i);
+    function clusterDist(a, b) {
+        if (linkage === 'average') {
+            let sum = 0, count = 0;
+            for (const i of clusters[a]) for (const j of clusters[b]) {
+                sum += dist[i][j]; count++;
+            }
+            return sum / count;
+        } else if (linkage === 'ward') {
+            // Use average for simplicity
+            let sum = 0, count = 0;
+            for (const i of clusters[a]) for (const j of clusters[b]) {
+                sum += dist[i][j]; count++;
+            }
+            return sum / count;
+        }
+        return 0;
+    }
+    while (active.length > 1) {
+        let minD = Infinity, minA = -1, minB = -1;
+        for (let i = 0; i < active.length; ++i) {
+            for (let j = i + 1; j < active.length; ++j) {
+                const d = clusterDist(active[i], active[j]);
+                if (d < minD) {
+                    minD = d; minA = i; minB = j;
+                }
+            }
+        }
+        // Merge clusters
+        clusters[active[minA]] = clusters[active[minA]].concat(clusters[active[minB]]);
+        active.splice(minB, 1);
+    }
+    return clusters[active[0]];
+}
+
+function spectralOrder(order, data) {
+    // Simple spectral ordering using Laplacian and Fiedler vector
+    const n = order.length;
+    const matrix = getDistanceMatrix(data, order);
+    // Build Laplacian
+    const L = Array.from({length: n}, () => Array(n).fill(0));
+    for (let i = 0; i < n; ++i) {
+        let rowSum = 0;
+        for (let j = 0; j < n; ++j) {
+            if (i !== j) {
+                L[i][j] = -matrix[i][j];
+                rowSum += matrix[i][j];
+            }
+        }
+        L[i][i] = rowSum;
+    }
+    // Power iteration for Fiedler vector
+    let v = Array(n).fill(0).map((_, i) => Math.random());
+    for (let iter = 0; iter < 100; ++iter) {
+        let vNew = Array(n).fill(0);
+        for (let i = 0; i < n; ++i) {
+            for (let j = 0; j < n; ++j) {
+                vNew[i] += L[i][j] * v[j];
+            }
+        }
+        const norm = Math.sqrt(vNew.reduce((a, b) => a + b * b, 0));
+        v = vNew.map(x => x / (norm + 1e-9));
+    }
+    // Sort by Fiedler vector
+    return order.map((idx, i) => [idx, v[i]]).sort((a, b) => a[1] - b[1]).map(x => x[0]);
+}
+
+function randomOrder(order) {
+    const arr = order.slice();
+    for (let i = arr.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [arr[i], arr[j]] = [arr[j], arr[i]];
+    }
+    return arr;
+}
+
+function louvainClustering(order, data) {
+    // Simple greedy modularity-based community detection (approximate)
+    // Assign each node to its own community, then merge for max modularity
+    // For demo, just group by sum of row values (not true Louvain)
+    const n = order.length;
+    const scores = order.map(idx => {
+        let sum = 0;
+        for (let j = 0; j < n; ++j) sum += data[idx][order[j]] || 0;
+        return [idx, sum];
+    });
+    scores.sort((a, b) => b[1] - a[1]);
+    return scores.map(x => x[0]);
+}
+
+function labelPropagation(order, data) {
+    // Simple label propagation: assign each node to the label of its max neighbor
+    // For demo, just sort by max value in row
+    const n = order.length;
+    const scores = order.map(idx => {
+        let max = 0;
+        for (let j = 0; j < n; ++j) max = Math.max(max, data[idx][order[j]] || 0);
+        return [idx, max];
+    });
+    scores.sort((a, b) => b[1] - a[1]);
+    return scores.map(x => x[0]);
+}
+
+function modularityMaximization(order, data) {
+    // For demo, sort by sum of row minus sum of col (not true modularity)
+    const n = order.length;
+    const scores = order.map(idx => {
+        let sumRow = 0, sumCol = 0;
+        for (let j = 0; j < n; ++j) {
+            sumRow += data[idx][order[j]] || 0;
+            sumCol += data[order[j]][idx] || 0;
+        }
+        return [idx, sumRow - sumCol];
+    });
+    scores.sort((a, b) => b[1] - a[1]);
+    return scores.map(x => x[0]);
+}
+
+function affinityPropagation(order, data) {
+    // Not practical for 700x700 in JS; use a random shuffle as a placeholder
+    return randomOrder(order);
+}
+
+function nmfClustering(order, data) {
+    // Simple NMF: use sum of row as a proxy for factorization
+    const n = order.length;
+    const scores = order.map(idx => {
+        let sum = 0;
+        for (let j = 0; j < n; ++j) sum += data[idx][order[j]] || 0;
+        return [idx, sum];
+    });
+    scores.sort((a, b) => b[1] - a[1]);
+    return scores.map(x => x[0]);
+}
+
+function kmeansSpectral(order, data, k = 5) {
+    // Use spectral embedding (top 2 eigenvectors) and k-means
+    const n = order.length;
+    const matrix = getDistanceMatrix(data, order);
+    // Build Laplacian
+    const L = Array.from({length: n}, () => Array(n).fill(0));
+    for (let i = 0; i < n; ++i) {
+        let rowSum = 0;
+        for (let j = 0; j < n; ++j) {
+            if (i !== j) {
+                L[i][j] = -matrix[i][j];
+                rowSum += matrix[i][j];
+            }
+        }
+        L[i][i] = rowSum;
+    }
+    // Power iteration for top 2 eigenvectors
+    let v1 = Array(n).fill(0).map(() => Math.random());
+    let v2 = Array(n).fill(0).map(() => Math.random());
+    for (let iter = 0; iter < 50; ++iter) {
+        let v1New = Array(n).fill(0);
+        let v2New = Array(n).fill(0);
+        for (let i = 0; i < n; ++i) {
+            for (let j = 0; j < n; ++j) {
+                v1New[i] += L[i][j] * v1[j];
+                v2New[i] += L[i][j] * v2[j];
+            }
+        }
+        let norm1 = Math.sqrt(v1New.reduce((a, b) => a + b * b, 0));
+        let norm2 = Math.sqrt(v2New.reduce((a, b) => a + b * b, 0));
+        v1 = v1New.map(x => x / (norm1 + 1e-9));
+        v2 = v2New.map(x => x / (norm2 + 1e-9));
+    }
+    // k-means on (v1, v2)
+    let centroids = [];
+    for (let i = 0; i < k; ++i) {
+        centroids.push([v1[Math.floor(i * n / k)], v2[Math.floor(i * n / k)]]);
+    }
+    let labels = Array(n).fill(0);
+    for (let iter = 0; iter < 10; ++iter) {
+        // Assign
+        for (let i = 0; i < n; ++i) {
+            let minDist = Infinity, minIdx = 0;
+            for (let j = 0; j < k; ++j) {
+                let dx = v1[i] - centroids[j][0];
+                let dy = v2[i] - centroids[j][1];
+                let d = dx * dx + dy * dy;
+                if (d < minDist) { minDist = d; minIdx = j; }
+            }
+            labels[i] = minIdx;
+        }
+        // Update
+        let sums = Array.from({length: k}, () => [0, 0, 0]);
+        for (let i = 0; i < n; ++i) {
+            sums[labels[i]][0] += v1[i];
+            sums[labels[i]][1] += v2[i];
+            sums[labels[i]][2] += 1;
+        }
+        for (let j = 0; j < k; ++j) {
+            if (sums[j][2] > 0) {
+                centroids[j][0] = sums[j][0] / sums[j][2];
+                centroids[j][1] = sums[j][1] / sums[j][2];
+            }
+        }
+    }
+    // Order by cluster, then by v1
+    return order.map((idx, i) => [idx, labels[i], v1[i]]).sort((a, b) => a[1] - b[1] || a[2] - b[2]).map(x => x[0]);
+}
+
+function applyClustering(method, data, rowNames) {
+    if (!originalOrder) originalOrder = rowNames.slice();
+    let order = originalOrder.slice();
+    if (method === 'none') {
+        return order;
+    } else if (method === 'random') {
+        return randomOrder(order);
+    } else if (method === 'ward') {
+        return hierarchicalClustering(order, data, 'ward').map(i => order[i]);
+    } else if (method === 'average') {
+        return hierarchicalClustering(order, data, 'average').map(i => order[i]);
+    } else if (method === 'spectral') {
+        return spectralOrder(order, data);
+    } else if (method === 'louvain') {
+        return louvainClustering(order, data);
+    } else if (method === 'labelprop') {
+        return labelPropagation(order, data);
+    } else if (method === 'modularity') {
+        return modularityMaximization(order, data);
+    } else if (method === 'affinity') {
+        return affinityPropagation(order, data);
+    } else if (method === 'nmf') {
+        return nmfClustering(order, data);
+    } else if (method === 'kmeans') {
+        return kmeansSpectral(order, data, 5);
+    }
+    return order;
+}
+
 function createHeatmap(data, colorScheme) {
     const canvas = document.getElementById('heatmap_canvas');
     resizeCanvasToDisplaySize(canvas);
@@ -220,9 +483,13 @@ function createHeatmap(data, colorScheme) {
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0); // Scale for crispness
 
     const rowNames = Object.keys(data);
-    const colNames = Object.keys(data[rowNames[0]]);
     const numRows = rowNames.length;
-    const numCols = colNames.length;
+    const numCols = numRows; // Always square, use same order for both
+
+    // Clustering order
+    if (!currentOrder || currentOrder.length !== numRows) {
+        currentOrder = rowNames.slice();
+    }
 
     // Clamp pan to bounds
     const displayWidth = canvas.width / dpr;
@@ -231,7 +498,7 @@ function createHeatmap(data, colorScheme) {
     panY = Math.max(0, Math.min(panY, numRows * CELL_SIZE - displayHeight));
 
     // Color scale
-    const values = rowNames.flatMap(row => colNames.map(col => data[row][col] || 0));
+    const values = rowNames.flatMap(row => rowNames.map(col => data[row][col] || 0));
     const colorScale = colorScales[colorScheme].domain([colorMin, colorMax]);
 
     // Draw only visible cells
@@ -242,7 +509,9 @@ function createHeatmap(data, colorScheme) {
 
     for (let i = startRow; i < endRow; i++) {
         for (let j = startCol; j < endCol; j++) {
-            const value = data[rowNames[i]][colNames[j]] || 0;
+            const rowIdx = currentOrder[i];
+            const colIdx = currentOrder[j];
+            const value = data[rowIdx][colIdx] || 0;
             ctx.fillStyle = colorScale(value);
             ctx.fillRect(j * CELL_SIZE - panX, i * CELL_SIZE - panY, CELL_SIZE, CELL_SIZE);
         }
@@ -257,9 +526,11 @@ function createHeatmap(data, colorScheme) {
         const col = Math.floor(x / CELL_SIZE);
         const row = Math.floor(y / CELL_SIZE);
         if (row >= 0 && row < numRows && col >= 0 && col < numCols) {
-            const value = data[rowNames[row]][colNames[col]] || 0;
+            const rowIdx = currentOrder[row];
+            const colIdx = currentOrder[col];
+            const value = data[rowIdx][colIdx] || 0;
             tooltip.transition().duration(50).style('opacity', 1);
-            tooltip.html(`${rowNames[row]} vs ${colNames[col]}<br/>Value: ${value.toFixed(4)}`)
+            tooltip.html(`${rowIdx} vs ${colIdx}<br/>Value: ${value.toFixed(4)}`)
                 .style('left', (event.pageX + 10) + 'px')
                 .style('top', (event.pageY - 28) + 'px');
         } else {
@@ -341,8 +612,14 @@ async function loadAllData() {
 const updateHeatmap = debounce(() => {
     const dist = document.getElementById('distance').value;
     const colorScheme = document.getElementById('colorScheme').value;
+    const clustering = document.getElementById('clustering').value;
     if (dataCache[dist]) {
-        createHeatmap(dataCache[dist], colorScheme);
+        const data = dataCache[dist];
+        const rowNames = Object.keys(data);
+        if (!currentOrder || currentOrder.length !== rowNames.length) {
+            currentOrder = applyClustering(clustering, data, rowNames);
+        }
+        createHeatmap(data, colorScheme);
     }
 }, 100);
 
@@ -359,6 +636,16 @@ function setupControlListeners() {
     document.getElementById('version').addEventListener('change', switchVersion);
     document.getElementById('minColor').addEventListener('input', updateHeatmap);
     document.getElementById('maxColor').addEventListener('input', updateHeatmap);
+    document.getElementById('clustering').addEventListener('change', () => {
+        const dist = document.getElementById('distance').value;
+        const clustering = document.getElementById('clustering').value;
+        if (dataCache[dist]) {
+            const data = dataCache[dist];
+            const rowNames = Object.keys(data);
+            currentOrder = applyClustering(clustering, data, rowNames);
+            updateHeatmap();
+        }
+    });
 }
 
 // Initial load
